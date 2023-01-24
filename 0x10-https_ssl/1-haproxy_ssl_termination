@@ -1,30 +1,40 @@
-#!/usr/bin/env bash
-# script to report information about server domains
-# shellcheck disable=SC2086
-check_domain() {
-	# awk will use record seperator of space
-	# space sperated list of sub domains
-	SUBDOMAINS='www lb-01 web-01 web-02'
+global
+    log     /dev/log local0
+    maxconn 2048
+    user    haproxy
+    group   haproxy
+    tune.ssl.default-dh-param 2048
 
-	if [ -z "$1" ]; then
-		exit
-	fi
-	# no sub domain specified, do all
-	if [ -z "$2" ]; then
-		echo "$SUBDOMAINS" | awk -v domain="$1"\
-		'BEGIN { RS=" " }
-		{split($0,ARR," ");
-		cmd = "dig " ARR[1]"."domain " | grep -A1 \"ANSWER SECTION:\" | tail -n1";
-		system(cmd)
-		close(cmd)}' | awk\
-		'{
-		split($0, DOMS, ".");
-		print "The subdomain " DOMS[1] " is a " $4 " record and points to " $5}'
-	else
-		dig "$2.$1" | grep -A1 "ANSWER SECTION:" | tail -n1 | awk\
-		'{
-		split($0, DOMS, ".");
-		print "The subdomain " DOMS[1] " is a " $4 " record and points to " $5}'
-	fi
-}
-check_domain "$1" "$2"
+defaults
+    log     global
+    mode    http
+    option  httplog
+    option  dontlognull
+    retries 3
+    option  redispatch
+    timeout connect  5000
+    timeout client  10000
+    timeout server  10000
+    option  forwardfor
+    option  http-server-close
+
+frontend www-http
+    bind   0.0.0.0:80
+    reqadd X-Forwarded-Proto:\ http
+    default_backend www-backend
+
+frontend www-https
+    bind   0.0.0.0:443 ssl crt /etc/haproxy/certs/www.bdbnb.site.pem
+    reqadd X-Forwarded-Proto:\ https
+    acl    letsencrypt-acl path_beg /.well-known/acme-challenge/
+    use_backend letsencrypt-backend if letsencrypt-acl
+    default_backend www-backend
+
+backend www-backend
+    balance  roundrobin
+    redirect scheme https if !{ ssl_fc }
+    server 375-web-01 104.196.168.90:80 check
+    server 375-web-02 35.196.46.172:80 check
+
+backend letsencrypt-backend
+    server letsencrypt 127.0.0.1:54321
